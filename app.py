@@ -16,36 +16,53 @@ st.info("""
 - B파일 **O열** ← 센터명, **X열** ← 배정된 아파트명
 """)
 
-# ── A파일 자동 로드 (GitHub에 고정) ──
 A_FILE = "타운보드_가동리스트_패키지상품__260323.xlsx"
 
 @st.cache_data
 def load_apt_map():
     if not os.path.exists(A_FILE):
-        return None, f"❌ A파일({A_FILE})을 찾을 수 없습니다. GitHub 저장소에 파일이 있는지 확인하세요."
+        return None, f"❌ A파일({A_FILE})을 찾을 수 없습니다."
     try:
-        df = pd.read_excel(A_FILE, sheet_name=0, header=None)
-        # row5 = 헤더, row6부터 데이터
-        # col3 = 아파트명, col7 = 지역3(법정), col13 = 센터명
+        # openpyxl로 직접 읽기 (pandas보다 안정적)
+        wb = load_workbook(A_FILE, read_only=True, data_only=True)
+        ws = wb.worksheets[0]  # 첫 번째 시트
+
         result = {}
-        for _, row in df.iloc[6:].iterrows():
-            aname = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
-            g_val = str(row.iloc[7]).strip() if pd.notna(row.iloc[7]) else ''
-            center = str(row.iloc[13]).strip() if pd.notna(row.iloc[13]) else ''
-            if not aname or aname in ('nan', '아파트명') or aname.startswith('합'):
+        header_found = False
+        col_apt, col_g, col_center = 3, 7, 13  # 기본 인덱스 (0-based)
+
+        for row in ws.iter_rows(values_only=True):
+            # 헤더 행 찾기
+            if not header_found:
+                row_vals = [str(v) if v is not None else '' for v in row]
+                if '아파트명' in row_vals:
+                    col_apt    = row_vals.index('아파트명')
+                    col_g      = row_vals.index('지역3(법정)') if '지역3(법정)' in row_vals else 7
+                    col_center = row_vals.index('센터명') if '센터명' in row_vals else 13
+                    header_found = True
                 continue
-            if center == 'Y':
-                center = ''  # Y는 리모델링 표시이므로 센터명 아님
+
+            aname  = str(row[col_apt]).strip()    if row[col_apt]    is not None else ''
+            g_val  = str(row[col_g]).strip()      if row[col_g]      is not None else ''
+            center = str(row[col_center]).strip() if row[col_center] is not None else ''
+
+            if not aname or aname in ('None', '아파트명') or aname.startswith('합'):
+                continue
+            if center in ('Y', 'None'):
+                center = ''
+
             if aname not in result:
                 result[aname] = (g_val, center)
             elif not result[aname][1] and center:
-                result[aname] = (g_val, center)  # 센터명 있는 값으로 업데이트
+                result[aname] = (g_val, center)
+
+        wb.close()
         return result, None
     except Exception as e:
         return None, f"❌ A파일 로드 오류: {e}"
 
-apt_map, err = load_apt_map()
 
+apt_map, err = load_apt_map()
 if err:
     st.error(err)
     st.stop()
@@ -53,11 +70,9 @@ if err:
 센터있음 = sum(1 for v in apt_map.values() if v[1])
 st.success(f"✅ A파일 자동 로드 완료 → 아파트 {len(apt_map):,}개 (센터명 매핑: {센터있음:,}개)")
 
-# ── 상수 ──
 SKIP = {'단지명', '매체그룹명', 'nan', '', '합  계', '합계', '아파트', '구분',
-        '단지수', '소재명', '광고주', 'MGID', '유형별', '선택', '아파트명'}
+        '단지수', '소재명', '광고주', 'MGID', '유형별', '선택', '아파트명', 'None'}
 
-# ── 광고 파일 자동 탐색 ──
 def find_apts_auto(uploaded_file, apt_map):
     try:
         xl = pd.ExcelFile(uploaded_file)
@@ -100,7 +115,6 @@ def fuzzy_match(ad_name, keys):
             return k
     return None
 
-# ── 파일 업로드 ──
 st.divider()
 col1, col2 = st.columns(2)
 with col1:
@@ -112,7 +126,6 @@ if file_b and ad_files:
     if st.button("🚀 최적화 실행", type="primary"):
         with st.spinner("분석 중..."):
 
-            # 광고 파일별 아파트 목록
             ad_file_apts = {}
             for f in ad_files:
                 key = ad_key(f.name)
@@ -123,17 +136,15 @@ if file_b and ad_files:
                 else:
                     st.write(f"⚠️ **{key}**: 아파트 목록 없음 (패키지 상품으로 처리)")
 
-            # 아파트 빈도
             apt_freq = Counter()
             for apts in ad_file_apts.values():
                 for a in set(apts):
                     apt_freq[a] += 1
 
-            # B파일 처리
             file_b.seek(0)
             wb = load_workbook(file_b)
             ws = wb.active
-            COL_O, COL_X = 15, 24  # O=15번째열, X=24번째열
+            COL_O, COL_X = 15, 24
 
             used_g_per_ad = {}
             results = []
@@ -161,7 +172,6 @@ if file_b and ad_files:
                 if matched_key not in used_g_per_ad:
                     used_g_per_ad[matched_key] = set()
 
-                # 빈도 내림차순 정렬 후 지역3 중복 없는 아파트 선택
                 sorted_cands = sorted(candidates, key=lambda a: apt_freq.get(a, 0), reverse=True)
                 chosen = None
                 for apt in sorted_cands:
@@ -181,7 +191,6 @@ if file_b and ad_files:
                                 '배정 아파트(X열)': chosen,
                                 '비고': f"공통 {apt_freq.get(chosen,1)}개 광고"})
 
-            # 결과 표시
             st.divider()
             st.subheader("📊 배정 결과")
             df_result = pd.DataFrame(results)
@@ -189,11 +198,10 @@ if file_b and ad_files:
 
             n_ok = len(df_result[df_result['센터명(O열)'] != '—'])
             n_no = len(df_result[df_result['센터명(O열)'] == '—'])
-            col1, col2 = st.columns(2)
-            col1.metric("배정 완료", f"{n_ok}행")
-            col2.metric("미배정 (패키지/파일없음)", f"{n_no}행")
+            c1, c2 = st.columns(2)
+            c1.metric("배정 완료", f"{n_ok}행")
+            c2.metric("미배정", f"{n_no}행")
 
-            # 다운로드
             out = BytesIO()
             wb.save(out)
             st.download_button(
