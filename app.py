@@ -4,8 +4,8 @@ from io import BytesIO
 from collections import Counter
 from openpyxl import load_workbook
 
-st.set_page_config(page_title="광고 동선 최적화", layout="wide")
-st.title("📍 광고 동선 최적화 시스템")
+st.set_page_config(page_title="타운보드 센터 배정용", layout="wide")
+st.title("📍 타운보드 센터 배정용")
 st.info("""
 **작동 방식**
 - 광고 파일의 **모든 시트 × 모든 열**을 자동 스캔하여 아파트 목록을 찾습니다.
