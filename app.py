@@ -5,11 +5,11 @@ from collections import Counter
 from openpyxl import load_workbook
 import os
 
-st.set_page_config(page_title="광고 동선 최적화", layout="wide")
-st.title("📍 광고 동선 최적화 시스템")
+st.set_page_config(page_title="타운보드 센터 배정용", layout="wide")
+st.title("📍타운보드 센터 배정용")
 st.info("""
 **작동 방식**
-- 아파트 목록 파일(A파일)은 자동으로 불러옵니다.
+- 가동리스트는은 자동으로 불러옵니다.
 - **광고게첨리스트** 파일명 → O열(센터명) + S열(아파트명) 자동 입력
 - O열에 이미 센터명이 있는 행은 유지하고, 아파트명(S 또는 X열)만 배정합니다.
 """)
