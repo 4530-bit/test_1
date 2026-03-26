@@ -279,4 +279,4 @@ if b_files and ad_files:
                 )
                 st.divider()
 else:
-    st.info("B 파일과 광고 파일을 업로드하면 자동으로 분석이 시작됩니다.")
+    st.info("게첨리스트와 송출요청를 업로드하면 자동으로 분석이 시작됩니다.")
