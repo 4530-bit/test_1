@@ -23,7 +23,9 @@ def load_apt_map():
     if not os.path.exists(A_FILE):
         return None, f"❌ A파일({A_FILE})을 찾을 수 없습니다."
     try:
-        wb = load_workbook(A_FILE, read_only=True, data_only=True)
+        with open(A_FILE, "rb") as f:
+            file_bytes = BytesIO(f.read())
+        wb = load_workbook(file_bytes, read_only=True, data_only=True)
         ws = wb.worksheets[0]
         result = {}
         header_found = False
