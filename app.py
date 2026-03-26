@@ -218,12 +218,12 @@ st.divider()
 col1, col2 = st.columns(2)
 with col1:
     b_files = st.file_uploader(
-        "📋 광고게첨리스트 파일 (여러 개 가능)",
+        "📋 광고게첨리스트 파일 ",
         type=["xlsx"], accept_multiple_files=True
     )
 with col2:
     ad_files = st.file_uploader(
-        "📁 광고 파일들 (여러 개 업로드 가능)",
+        "📁 송출요청서 (여러 개 가능)",
         type=["xlsx"], accept_multiple_files=True
     )
 
