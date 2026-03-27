@@ -6,12 +6,12 @@ from openpyxl import load_workbook
 import os
 
 st.set_page_config(page_title="타운보드 센터 배정용", layout="wide")
-st.title("📍타운보드 센터 배정용")
+st.title("📍 타운보드 센터 배정용")
 st.info("""
 **작동 방식**
 - 가동리스트는 자동으로 불러옵니다.
-- **광고게첨리스트** 파일명 → O열(센터명) + S열(아파트명) 자동 입력
-- O열에 이미 센터명이 있는 행은 유지하고, 아파트명(S 또는 X열)만 배정합니다.
+- 광고게첨리스트 파일 → **O열(센터명) + S열(아파트명)** 자동 입력
+- 광고파일이 없거나 패키지 상품이면 해당 행은 미배정으로 표시됩니다.
 """)
 
 A_FILE = "타운보드_가동리스트_패키지상품__260323.xlsx"
@@ -65,24 +65,26 @@ if err:
     st.stop()
 
 센터있음 = sum(1 for v in apt_map.values() if v[1])
-st.success(f"✅ A파일 자동 로드 완료 → 아파트 {len(apt_map):,}개 (센터명 매핑: {센터있음:,}개)")
+st.success(f"✅ 가동리스트 로드 완료 → 아파트 {len(apt_map):,}개 (센터명 매핑: {센터있음:,}개)")
 
 SKIP = {'단지명', '매체그룹명', 'nan', '', '합  계', '합계', '아파트', '구분',
         '단지수', '소재명', '광고주', 'MGID', '유형별', '선택', '아파트명', 'None'}
 
-def is_게첨리스트(fname):
-    return '광고게첨리스트' in fname
-
 def find_header_row(ws):
-    """헤더 행(광고명 열 포함) 찾기 → (header_excel_row, ad_col_index)"""
+    """
+    헤더 행 탐색: '소재명' 계열 셀이 있는 행 반환
+    → (header_excel_row 1-indexed, ad_col_index 0-indexed)
+    """
     for i, row in enumerate(ws.iter_rows(max_row=20, values_only=True), start=1):
-        row_vals = [str(v).strip() if v is not None else '' for v in row]
+        row_vals = [''.join(str(v).split()) if v is not None else '' for v in row]
+        # 공백 제거 후 '소재명' 포함 여부로 판단
         for j, v in enumerate(row_vals):
-            if '소' in v and '재' in v and '명' in v:
+            if '소재명' in v:
                 return i, j
     return 1, 5  # 기본값
 
 def find_apts_auto(uploaded_file, apt_map):
+    """광고파일에서 A파일 매칭 아파트를 가장 많이 찾을 수 있는 시트·열 자동 탐색"""
     try:
         xl = pd.ExcelFile(uploaded_file)
     except Exception:
@@ -114,29 +116,30 @@ def ad_key(fname):
     return fname.replace('.xlsx', '').replace('송출요청서_', '').strip()
 
 def fuzzy_match(ad_name, keys):
+    """광고명과 파일키 매칭 — 정확일치 우선, 그 다음 부분일치"""
     ad_clean = ad_name.strip()
+    # 1순위: 정확 일치
     for k in keys:
-        if ad_clean == k or ad_clean in k or k in ad_clean:
+        if ad_clean == k:
             return k
+    # 2순위: 부분 포함 (짧은 키 우선으로 오탐 방지)
+    partial = [(k, len(k)) for k in keys if ad_clean in k or k in ad_clean]
+    if partial:
+        return max(partial, key=lambda x: x[1])[0]  # 더 긴(구체적인) 키 선택
     return None
 
-def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, is_게첨):
-    """B파일 1개 처리 → (결과 wb, results 리스트)"""
+def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
+    """게첨리스트 B파일 처리 → (결과 wb, results 리스트)"""
     b_file.seek(0)
     wb = load_workbook(b_file)
     ws = wb.active
 
     # 헤더 행 & 광고명 열 찾기
     header_row, ad_col_idx = find_header_row(ws)
-    ad_col = ad_col_idx + 1  # openpyxl은 1-indexed
+    ad_col = ad_col_idx + 1  # openpyxl 1-indexed
 
-    # 열 설정: 게첨리스트 vs 일반 B파일
-    if is_게첨:
-        COL_CENTER = 15   # O열 = 센터명
-        COL_APT    = 19   # S열 = 아파트명 (새로 입력)
-    else:
-        COL_CENTER = 15   # O열
-        COL_APT    = 24   # X열
+    COL_CENTER = 15   # O열 = 센터명
+    COL_APT    = 19   # S열 = 아파트명
 
     used_g_per_ad = {}
     results = []
@@ -144,71 +147,43 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, is_게첨):
     for excel_row in range(header_row + 1, ws.max_row + 1):
         cell_f = ws.cell(row=excel_row, column=ad_col)
         ad_name = str(cell_f.value).strip() if cell_f.value else ''
-        skip_names = {'None', '소  재  명 ', '소재명', ''}
-        if not ad_name or ad_name in skip_names:
+        if not ad_name or ''.join(ad_name.split()) in ('', '소재명'):
             continue
-
-        # O열 기존값 무시 — 항상 새로 입력
-        existing_center = None
-        has_center = False
 
         matched_key = fuzzy_match(ad_name, list(ad_file_apts.keys()))
         if not matched_key:
             results.append({'행': excel_row, '광고명': ad_name,
-                            '센터명': '—', '아파트명': '광고파일 없음', '비고': '광고파일 미업로드'})
+                            '센터명': '—', '아파트명': '—', '비고': '광고파일 미업로드'})
             continue
 
         candidates = ad_file_apts.get(matched_key, [])
         if not candidates:
             results.append({'행': excel_row, '광고명': ad_name,
-                            '센터명': str(existing_center) if has_center else '—',
-                            '아파트명': '—', '비고': '패키지 상품 (아파트 미지정)'})
+                            '센터명': '—', '아파트명': '—', '비고': '패키지 상품 (아파트 미지정)'})
             continue
 
         if matched_key not in used_g_per_ad:
             used_g_per_ad[matched_key] = set()
 
-        # 이미 센터 있으면 해당 센터에 맞는 아파트 우선 선택
+        # 빈도 높은 순 정렬 후 지역3 중복 없는 아파트 선택
         sorted_cands = sorted(candidates, key=lambda a: apt_freq.get(a, 0), reverse=True)
-
         chosen = None
-        if has_center:
-            center_val = str(existing_center).strip()
-            # 해당 센터의 아파트 중 지역3 중복 없는 것 선택
-            for apt in sorted_cands:
-                g_val, apt_center = apt_map[apt]
-                if apt_center == center_val and g_val not in used_g_per_ad[matched_key]:
-                    chosen = apt
-                    used_g_per_ad[matched_key].add(g_val)
-                    break
-            # 해당 센터에 없으면 그냥 지역3 중복 없는 것
-            if not chosen:
-                for apt in sorted_cands:
-                    g_val, _ = apt_map[apt]
-                    if g_val not in used_g_per_ad[matched_key]:
-                        chosen = apt
-                        used_g_per_ad[matched_key].add(g_val)
-                        break
-        else:
-            for apt in sorted_cands:
-                g_val, _ = apt_map[apt]
-                if g_val not in used_g_per_ad[matched_key]:
-                    chosen = apt
-                    used_g_per_ad[matched_key].add(g_val)
-                    break
+        for apt in sorted_cands:
+            g_val, _ = apt_map[apt]
+            if g_val not in used_g_per_ad[matched_key]:
+                chosen = apt
+                used_g_per_ad[matched_key].add(g_val)
+                break
+        if not chosen:
+            chosen = sorted_cands[0]  # 모든 지역3 소진 시 빈도 1위
 
-        if not chosen and sorted_cands:
-            chosen = sorted_cands[0]
-
-        if chosen:
-            g_val, center = apt_map[chosen]
-            final_center = str(existing_center).strip() if has_center else (center if center else '')
-            if not has_center:
-                ws.cell(row=excel_row, column=COL_CENTER).value = final_center
-            ws.cell(row=excel_row, column=COL_APT).value = chosen
-            results.append({'행': excel_row, '광고명': ad_name,
-                            '센터명': final_center, '아파트명': chosen,
-                            '비고': f"공통 {apt_freq.get(chosen,1)}개 광고"})
+        g_val, center = apt_map[chosen]
+        ws.cell(row=excel_row, column=COL_CENTER).value = center if center else ''
+        ws.cell(row=excel_row, column=COL_APT).value = chosen
+        results.append({'행': excel_row, '광고명': ad_name,
+                        '센터명': center if center else '(센터없음)',
+                        '아파트명': chosen,
+                        '비고': f"공통 {apt_freq.get(chosen, 1)}개 광고"})
 
     return wb, results
 
@@ -218,7 +193,7 @@ st.divider()
 col1, col2 = st.columns(2)
 with col1:
     b_files = st.file_uploader(
-        "📋 광고게첨리스트 파일 ",
+        "📋 광고게첨리스트 파일 (여러 개 가능)",
         type=["xlsx"], accept_multiple_files=True
     )
 with col2:
@@ -228,17 +203,17 @@ with col2:
     )
 
 if b_files and ad_files:
-    if st.button("🚀 최적화 실행", type="primary"):
+    if st.button("🚀 실행", type="primary"):
         with st.spinner("분석 중..."):
 
-            # 광고 파일 아파트 목록 추출
+            # 광고파일 아파트 목록 추출
             ad_file_apts = {}
             for f in ad_files:
                 key = ad_key(f.name)
                 apts, sheet, col = find_apts_auto(f, apt_map)
                 ad_file_apts[key] = apts
                 if apts:
-                    st.write(f"✅ **{key}**: '{sheet}' 시트 / {col+1}번 열 → {len(apts)}개 매칭")
+                    st.write(f"✅ **{key}**: '{sheet}' 시트 {col+1}번 열 → {len(apts)}개 매칭")
                 else:
                     st.write(f"⚠️ **{key}**: 아파트 목록 없음 (패키지 상품)")
 
@@ -249,14 +224,10 @@ if b_files and ad_files:
 
             st.divider()
 
-            # B파일 각각 처리
+            # 게첨리스트 B파일 각각 처리
             for b_file in b_files:
-                게첨 = is_게첨리스트(b_file.name)
-                파일타입 = "광고게첨리스트 (O열+S열)" if 게첨 else "일반 B파일 (O열+X열)"
                 st.subheader(f"📄 {b_file.name}")
-                st.caption(f"파일 유형: {파일타입}")
-
-                wb, results = process_b_file(b_file, ad_file_apts, apt_map, apt_freq, 게첨)
+                wb, results = process_b_file(b_file, ad_file_apts, apt_map, apt_freq)
 
                 df_result = pd.DataFrame(results)
                 if not df_result.empty:
@@ -279,4 +250,4 @@ if b_files and ad_files:
                 )
                 st.divider()
 else:
-    st.info("게첨리스트와 송출요청서를 업로드하면 자동으로 분석이 시작됩니다.")
+    st.info("게첨리스트와 송출요청서를 업로드해 주세요.")
