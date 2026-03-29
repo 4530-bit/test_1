@@ -4,6 +4,8 @@ from io import BytesIO
 from collections import Counter
 from openpyxl import load_workbook
 import os
+import re
+import difflib
 
 st.set_page_config(page_title="타운보드 센터 배정용", layout="wide")
 st.title("📍 타운보드 센터 배정용")
@@ -11,7 +13,8 @@ st.info("""
 **작동 방식**
 - 가동리스트는 자동으로 불러옵니다.
 - 광고게첨리스트 파일 → **O열(센터명) + S열(아파트명)** 자동 입력
-- 광고파일이 없거나 패키지 상품이면 해당 행은 미배정으로 표시됩니다.
+- 송출요청서 파일명과 광고명이 완전히 일치하지 않아도 **유사도 50% 이상**이면 자동 매칭합니다.
+- 단, 차수(1차·2차 등)가 서로 다른 경우는 매칭하지 않습니다.
 """)
 
 A_FILE = "타운보드_가동리스트_패키지상품__260323.xlsx"
@@ -70,18 +73,73 @@ st.success(f"✅ 가동리스트 로드 완료 → 아파트 {len(apt_map):,}개
 SKIP = {'단지명', '매체그룹명', 'nan', '', '합  계', '합계', '아파트', '구분',
         '단지수', '소재명', '광고주', 'MGID', '유형별', '선택', '아파트명', 'None'}
 
+SIMILARITY_THRESHOLD = 0.5  # 유사도 임계값
+
+# ── 유사도 매칭 함수 ──────────────────────────────────────────
+def _normalize(s):
+    """매칭용 정규화: 날짜·괄호·공백·특수문자 제거"""
+    s = s.strip()
+    s = re.sub(r'[()（）\[\]]', '_', s)          # 괄호 → 언더스코어
+    s = re.sub(r'_?\d{6}_?', '', s)              # 6자리 날짜 (250625)
+    s = re.sub(r'_?\d{4}[_년]\d{1,2}[월_]?', '', s)  # 연도_월 (2026_02월, 26년2월)
+    s = re.sub(r'[_\s]+', '', s)                 # 공백·언더스코어 제거
+    return s.lower()
+
+def _extract_ordinal(s):
+    """차수 숫자 추출: '2차' → 2, 없으면 None"""
+    m = re.search(r'(\d+)차', s)
+    return int(m.group(1)) if m else None
+
+def _similarity(ad_name, key):
+    """
+    광고명 ↔ 파일키 유사도 계산 (0.0 ~ 1.0)
+    - 차수가 둘 다 있고 다르면 → 0.0 (강제 불일치)
+    - 파일키에 차수 있는데 광고명엔 없으면 → 0.0 (다른 버전으로 간주)
+    - 그 외 → 정규화 후 문자열 유사도
+    """
+    ord_a = _extract_ordinal(ad_name)
+    ord_k = _extract_ordinal(key)
+
+    if ord_k is not None and ord_a is None:
+        return 0.0  # 파일은 2차인데 광고명엔 차수 없음 → 다른 광고
+    if ord_a is not None and ord_k is not None and ord_a != ord_k:
+        return 0.0  # 차수 충돌
+
+    na, nk = _normalize(ad_name), _normalize(key)
+    return difflib.SequenceMatcher(None, na, nk).ratio()
+
+def fuzzy_match(ad_name, keys):
+    """
+    광고명과 파일키 목록을 비교해 가장 유사한 키 반환.
+    1순위: 정확 일치
+    2순위: 유사도 ≥ 0.5 중 가장 높은 것
+    매칭 없으면 None
+    """
+    ad_clean = ad_name.strip()
+
+    # 1순위: 정확 일치
+    for k in keys:
+        if ad_clean == k:
+            return k, 1.0
+
+    # 2순위: 유사도 기반
+    scores = [(k, _similarity(ad_clean, k)) for k in keys]
+    scores = [(k, s) for k, s in scores if s >= SIMILARITY_THRESHOLD]
+    if scores:
+        best_key, best_score = max(scores, key=lambda x: x[1])
+        return best_key, best_score
+
+    return None, 0.0
+
+
 def find_header_row(ws):
-    """
-    헤더 행 탐색: '소재명' 계열 셀이 있는 행 반환
-    → (header_excel_row 1-indexed, ad_col_index 0-indexed)
-    """
+    """헤더 행 탐색 → (row 번호 1-indexed, 광고명 열 0-indexed)"""
     for i, row in enumerate(ws.iter_rows(max_row=20, values_only=True), start=1):
         row_vals = [''.join(str(v).split()) if v is not None else '' for v in row]
-        # 공백 제거 후 '소재명' 포함 여부로 판단
         for j, v in enumerate(row_vals):
             if '소재명' in v:
                 return i, j
-    return 1, 5  # 기본값
+    return 1, 5
 
 def find_apts_auto(uploaded_file, apt_map):
     """광고파일에서 A파일 매칭 아파트를 가장 많이 찾을 수 있는 시트·열 자동 탐색"""
@@ -115,31 +173,17 @@ def find_apts_auto(uploaded_file, apt_map):
 def ad_key(fname):
     return fname.replace('.xlsx', '').replace('송출요청서_', '').strip()
 
-def fuzzy_match(ad_name, keys):
-    """광고명과 파일키 매칭 — 정확일치 우선, 그 다음 부분일치"""
-    ad_clean = ad_name.strip()
-    # 1순위: 정확 일치
-    for k in keys:
-        if ad_clean == k:
-            return k
-    # 2순위: 부분 포함 (짧은 키 우선으로 오탐 방지)
-    partial = [(k, len(k)) for k in keys if ad_clean in k or k in ad_clean]
-    if partial:
-        return max(partial, key=lambda x: x[1])[0]  # 더 긴(구체적인) 키 선택
-    return None
-
 def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
     """게첨리스트 B파일 처리 → (결과 wb, results 리스트)"""
     b_file.seek(0)
     wb = load_workbook(b_file)
     ws = wb.active
 
-    # 헤더 행 & 광고명 열 찾기
     header_row, ad_col_idx = find_header_row(ws)
-    ad_col = ad_col_idx + 1  # openpyxl 1-indexed
+    ad_col = ad_col_idx + 1
 
-    COL_CENTER = 15   # O열 = 센터명
-    COL_APT    = 19   # S열 = 아파트명
+    COL_CENTER = 15   # O열
+    COL_APT    = 19   # S열
 
     used_g_per_ad = {}
     results = []
@@ -150,22 +194,26 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
         if not ad_name or ''.join(ad_name.split()) in ('', '소재명'):
             continue
 
-        matched_key = fuzzy_match(ad_name, list(ad_file_apts.keys()))
+        matched_key, score = fuzzy_match(ad_name, list(ad_file_apts.keys()))
+
         if not matched_key:
             results.append({'행': excel_row, '광고명': ad_name,
-                            '센터명': '—', '아파트명': '—', '비고': '광고파일 미업로드'})
+                            '센터명': '—', '아파트명': '—',
+                            '유사도': '—', '비고': '송출요청서 없음'})
             continue
 
         candidates = ad_file_apts.get(matched_key, [])
+        score_str = '정확일치' if score == 1.0 else f'{score:.0%}'
+
         if not candidates:
             results.append({'행': excel_row, '광고명': ad_name,
-                            '센터명': '—', '아파트명': '—', '비고': '패키지 상품 (아파트 미지정)'})
+                            '센터명': '—', '아파트명': '—',
+                            '유사도': score_str, '비고': '패키지 상품 (아파트 미지정)'})
             continue
 
         if matched_key not in used_g_per_ad:
             used_g_per_ad[matched_key] = set()
 
-        # 빈도 높은 순 정렬 후 지역3 중복 없는 아파트 선택
         sorted_cands = sorted(candidates, key=lambda a: apt_freq.get(a, 0), reverse=True)
         chosen = None
         for apt in sorted_cands:
@@ -175,14 +223,16 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
                 used_g_per_ad[matched_key].add(g_val)
                 break
         if not chosen:
-            chosen = sorted_cands[0]  # 모든 지역3 소진 시 빈도 1위
+            chosen = sorted_cands[0]
 
         g_val, center = apt_map[chosen]
         ws.cell(row=excel_row, column=COL_CENTER).value = center if center else ''
         ws.cell(row=excel_row, column=COL_APT).value = chosen
         results.append({'행': excel_row, '광고명': ad_name,
+                        '매칭 파일': matched_key,
                         '센터명': center if center else '(센터없음)',
                         '아파트명': chosen,
+                        '유사도': score_str,
                         '비고': f"공통 {apt_freq.get(chosen, 1)}개 광고"})
 
     return wb, results
@@ -206,7 +256,6 @@ if b_files and ad_files:
     if st.button("🚀 실행", type="primary"):
         with st.spinner("분석 중..."):
 
-            # 광고파일 아파트 목록 추출
             ad_file_apts = {}
             for f in ad_files:
                 key = ad_key(f.name)
@@ -224,13 +273,21 @@ if b_files and ad_files:
 
             st.divider()
 
-            # 게첨리스트 B파일 각각 처리
             for b_file in b_files:
                 st.subheader(f"📄 {b_file.name}")
                 wb, results = process_b_file(b_file, ad_file_apts, apt_map, apt_freq)
 
                 df_result = pd.DataFrame(results)
                 if not df_result.empty:
+                    # 유사도 매칭된 행 강조 표시
+                    fuzzy_matched = df_result[
+                        df_result.get('유사도', pd.Series()).apply(
+                            lambda x: isinstance(x, str) and '%' in str(x)
+                        )
+                    ]
+                    if not fuzzy_matched.empty:
+                        st.warning(f"⚠️ 유사도 매칭 {len(fuzzy_matched)}건 — 아래 표에서 '매칭 파일' 열로 확인하세요.")
+
                     st.dataframe(df_result, use_container_width=True)
                     n_ok = len(df_result[df_result['아파트명'] != '—'])
                     n_no = len(df_result) - n_ok
