@@ -173,6 +173,28 @@ def find_apts_auto(uploaded_file, apt_map):
 def ad_key(fname):
     return fname.replace('.xlsx', '').replace('송출요청서_', '').strip()
 
+# 대구 패키지 센터 우선순위
+DAEGU_PKG_CENTER_PRIORITY = ['칠성', '대남', '월배']
+
+def is_daegu_package(ws, excel_row):
+    """M열=대구 AND P열(아파트지정)에 '패키지' 또는 'Half' 포함 여부"""
+    m_val = ws.cell(row=excel_row, column=13).value  # M열: 지역
+    p_val = ws.cell(row=excel_row, column=16).value  # P열: 아파트지정
+    m_str = str(m_val).strip() if m_val else ''
+    p_str = str(p_val).strip() if p_val else ''
+    return '대구' in m_str and ('패키지' in p_str or 'Half' in p_str)
+
+def pick_daegu_pkg_apt(apt_map, used_centers):
+    """칠성→대남→월배 순으로 미사용 센터에서 아파트 반환"""
+    for center in DAEGU_PKG_CENTER_PRIORITY:
+        if center not in used_centers:
+            center_apts = [a for a, (g, c) in apt_map.items() if c == center]
+            if center_apts:
+                return center_apts[0], center
+    # 모두 소진 시 칠성 재사용
+    center_apts = [a for a, (g, c) in apt_map.items() if c == '칠성']
+    return (center_apts[0], '칠성') if center_apts else (None, None)
+
 def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
     """게첨리스트 B파일 처리 → (결과 wb, results 리스트)"""
     b_file.seek(0)
@@ -186,6 +208,7 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
     COL_APT    = 19   # S열
 
     used_g_per_ad = {}
+    used_centers_per_ad = {}  # 대구 패키지용
     results = []
 
     for excel_row in range(header_row + 1, ws.max_row + 1):
@@ -193,6 +216,26 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
         ad_name = str(cell_f.value).strip() if cell_f.value else ''
         if not ad_name or ''.join(ad_name.split()) in ('', '소재명'):
             continue
+
+        # ── 대구 패키지 특별 처리 ──────────────────────────────
+        if is_daegu_package(ws, excel_row):
+            if ad_name not in used_centers_per_ad:
+                used_centers_per_ad[ad_name] = set()
+            chosen, center = pick_daegu_pkg_apt(apt_map, used_centers_per_ad[ad_name])
+            if chosen:
+                used_centers_per_ad[ad_name].add(center)
+                ws.cell(row=excel_row, column=COL_CENTER).value = center
+                ws.cell(row=excel_row, column=COL_APT).value = chosen
+                results.append({'행': excel_row, '광고명': ad_name,
+                                '매칭 파일': '(대구 패키지 규칙)',
+                                '센터명': center, '아파트명': chosen,
+                                '유사도': '—', '비고': f'대구패키지 우선배정 ({center})'})
+            else:
+                results.append({'행': excel_row, '광고명': ad_name,
+                                '매칭 파일': '—', '센터명': '—', '아파트명': '—',
+                                '유사도': '—', '비고': '대구패키지 배정 실패'})
+            continue
+        # ──────────────────────────────────────────────────────
 
         matched_key, score = fuzzy_match(ad_name, list(ad_file_apts.keys()))
 
