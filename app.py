@@ -6,9 +6,10 @@ from openpyxl import load_workbook
 import os
 import re
 import difflib
+from collections import Counter
 
 st.set_page_config(page_title="타운보드 센터 배정용", layout="wide")
-st.title("📍타운보드 센터 배정용")
+st.title("📍 타운보드 센터 배정용")
 st.info("""
 **작동 방식**
 - 가동리스트는 자동으로 불러옵니다.
@@ -141,6 +142,33 @@ def find_header_row(ws):
                 return i, j
     return 1, 5
 
+
+REGION_KEYWORDS = {'서울','경기','인천','부산','대구','대전','광주','울산','세종',
+                   '강원','충북','충남','전북','전남','경북','경남','제주'}
+
+def get_ad_regions(uploaded_file):
+    """송출요청서에서 지역1 컬럼의 값들을 추출 → set 반환"""
+    try:
+        uploaded_file.seek(0)
+        xl = pd.ExcelFile(uploaded_file)
+        for sheet in xl.sheet_names:
+            uploaded_file.seek(0)
+            df = pd.read_excel(uploaded_file, sheet_name=sheet, header=None)
+            for ri in range(min(15, len(df))):
+                row_vals = [str(v).strip() for v in df.iloc[ri]]
+                if '지역1' in row_vals:
+                    ci = row_vals.index('지역1')
+                    vals = df.iloc[ri+1:, ci].dropna().astype(str).str.strip()
+                    regions = {v for v in vals if v in REGION_KEYWORDS}
+                    if regions:
+                        try: uploaded_file.seek(0)
+                        except: pass
+                        return regions
+    except: pass
+    try: uploaded_file.seek(0)
+    except: pass
+    return set()
+
 def find_apts_auto(uploaded_file, apt_map):
     """광고파일에서 A파일 매칭 아파트를 가장 많이 찾을 수 있는 시트·열 자동 탐색"""
     try:
@@ -195,7 +223,7 @@ def pick_daegu_pkg_apt(apt_map, used_centers):
     center_apts = [a for a, (g, c) in apt_map.items() if c == '칠성']
     return (center_apts[0], '칠성') if center_apts else (None, None)
 
-def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
+def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None):
     """게첨리스트 B파일 처리 → (결과 wb, results 리스트)"""
     b_file.seek(0)
     wb = load_workbook(b_file)
@@ -237,7 +265,20 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq):
             continue
         # ──────────────────────────────────────────────────────
 
-        matched_key, score = fuzzy_match(ad_name, list(ad_file_apts.keys()))
+        # M열 지역 읽기 (지역 필터링용)
+        b_region = str(ws.cell(row=excel_row, column=13).value or '').strip()
+
+        # 지역 기반 후보 키 필터링: B파일 지역과 송출요청서 지역이 맞지 않으면 제외
+        if ad_file_regions and b_region:
+            valid_keys = [
+                k for k in ad_file_apts.keys()
+                if not ad_file_regions.get(k)          # 지역 미확인 파일은 허용
+                or b_region in ad_file_regions.get(k, set())  # 지역 일치
+            ]
+        else:
+            valid_keys = list(ad_file_apts.keys())
+
+        matched_key, score = fuzzy_match(ad_name, valid_keys)
 
         if not matched_key:
             results.append({'행': excel_row, '광고명': ad_name,
@@ -300,12 +341,15 @@ if b_files and ad_files:
         with st.spinner("분석 중..."):
 
             ad_file_apts = {}
+            ad_file_regions = {}  # 송출요청서별 지역 집합
             for f in ad_files:
                 key = ad_key(f.name)
+                regions = get_ad_regions(f)
+                ad_file_regions[key] = regions
                 apts, sheet, col = find_apts_auto(f, apt_map)
                 ad_file_apts[key] = apts
                 if apts:
-                    st.write(f"✅ **{key}**: '{sheet}' 시트 {col+1}번 열 → {len(apts)}개 매칭")
+                    st.write(f"✅ **{key}**: '{sheet}' 시트 {col+1}번 열 → {len(apts)}개 매칭 (지역: {', '.join(sorted(regions)) if regions else '미확인'})")
                 else:
                     st.write(f"⚠️ **{key}**: 아파트 목록 없음 (패키지 상품)")
 
@@ -318,7 +362,7 @@ if b_files and ad_files:
 
             for b_file in b_files:
                 st.subheader(f"📄 {b_file.name}")
-                wb, results = process_b_file(b_file, ad_file_apts, apt_map, apt_freq)
+                wb, results = process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions)
 
                 df_result = pd.DataFrame(results)
                 if not df_result.empty:
