@@ -395,4 +395,4 @@ if b_files and ad_files:
                 )
                 st.divider()
 else:
-    st.info("게첨리스트와 송출요청서를 업로드해 주세요.")
+    st.info("게첨리스트와 송출요청서를 업로드하세요.")
