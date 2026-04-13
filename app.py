@@ -15,7 +15,6 @@ st.info("""
 - 가동리스트는 자동으로 불러옵니다.
 - 광고게첨리스트 파일 → **O열(센터명) + S열(아파트명)** 자동 입력
 - 송출요청서 파일명과 광고명이 완전히 일치하지 않아도 **유사도 50% 이상**이면 자동 매칭합니다.
-- 송출요청서에 '1.신규송출리스트'시트가 있어야 자동 매칭됩니다.(패키지, Half는 우선순위에 따라 매칭)
 - 단, 차수(1차·2차 등)가 서로 다른 경우는 매칭하지 않습니다.
 """)
 
@@ -32,7 +31,7 @@ def load_apt_map():
         ws = wb.worksheets[0]
         result = {}
         header_found = False
-        col_apt, col_g, col_center = 3, 7, 13
+        col_apt, col_g, col_center, col_r1 = 3, 7, 13, 5  # col_r1: 지역1
 
         for row in ws.iter_rows(values_only=True):
             if not header_found:
@@ -41,22 +40,26 @@ def load_apt_map():
                     col_apt    = row_vals.index('아파트명')
                     col_g      = row_vals.index('지역3(법정)') if '지역3(법정)' in row_vals else 7
                     col_center = row_vals.index('센터명') if '센터명' in row_vals else 13
+                    col_r1     = row_vals.index('지역1') if '지역1' in row_vals else 5
                     header_found = True
                 continue
 
             aname  = str(row[col_apt]).strip()    if row[col_apt]    is not None else ''
             g_val  = str(row[col_g]).strip()      if row[col_g]      is not None else ''
             center = str(row[col_center]).strip() if row[col_center] is not None else ''
+            r1     = str(row[col_r1]).strip()     if row[col_r1]     is not None else ''
 
             if not aname or aname in ('None', '아파트명') or aname.startswith('합'):
                 continue
             if center in ('Y', 'None'):
                 center = ''
+            if r1 in ('None', '지역1'):
+                r1 = ''
 
             if aname not in result:
-                result[aname] = (g_val, center)
+                result[aname] = (g_val, center, r1)
             elif not result[aname][1] and center:
-                result[aname] = (g_val, center)
+                result[aname] = (g_val, center, r1)
 
         wb.close()
         return result, None
@@ -217,11 +220,11 @@ def pick_daegu_pkg_apt(apt_map, used_centers):
     """칠성→대남→월배 순으로 미사용 센터에서 아파트 반환"""
     for center in DAEGU_PKG_CENTER_PRIORITY:
         if center not in used_centers:
-            center_apts = [a for a, (g, c) in apt_map.items() if c == center]
+            center_apts = [a for a, (g, c, r) in apt_map.items() if c == center]
             if center_apts:
                 return center_apts[0], center
     # 모두 소진 시 칠성 재사용
-    center_apts = [a for a, (g, c) in apt_map.items() if c == '칠성']
+    center_apts = [a for a, (g, c, r) in apt_map.items() if c == '칠성']
     return (center_apts[0], '칠성') if center_apts else (None, None)
 
 def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None):
@@ -299,18 +302,31 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
         if matched_key not in used_g_per_ad:
             used_g_per_ad[matched_key] = set()
 
+        # B파일 M열 지역과 아파트 지역1이 일치하는 후보 우선 사용
         sorted_cands = sorted(candidates, key=lambda a: apt_freq.get(a, 0), reverse=True)
+        region_matched = [a for a in sorted_cands
+                          if not b_region or apt_map[a][2] == b_region]
+        search_order = region_matched if region_matched else sorted_cands
+
         chosen = None
-        for apt in sorted_cands:
-            g_val, _ = apt_map[apt]
+        for apt in search_order:
+            g_val, _, _ = apt_map[apt]
             if g_val not in used_g_per_ad[matched_key]:
                 chosen = apt
                 used_g_per_ad[matched_key].add(g_val)
                 break
         if not chosen:
+            # 지역 일치 후보에서 못 찾으면 전체에서 재시도
+            for apt in sorted_cands:
+                g_val, _, _ = apt_map[apt]
+                if g_val not in used_g_per_ad[matched_key]:
+                    chosen = apt
+                    used_g_per_ad[matched_key].add(g_val)
+                    break
+        if not chosen:
             chosen = sorted_cands[0]
 
-        g_val, center = apt_map[chosen]
+        g_val, center, _ = apt_map[chosen]
         ws.cell(row=excel_row, column=COL_CENTER).value = center if center else ''
         ws.cell(row=excel_row, column=COL_APT).value = chosen
         results.append({'행': excel_row, '광고명': ad_name,
@@ -395,4 +411,4 @@ if b_files and ad_files:
                 )
                 st.divider()
 else:
-    st.info("게첨리스트와 송출요청서를 업로드하세요.")
+    st.info("게첨리스트와 송출요청서를 업로드해 주세요.")
