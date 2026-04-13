@@ -240,7 +240,6 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
     COL_APT    = 19   # S열
 
     used_g_per_ad = {}
-    used_centers_per_ad = {}  # 대구 패키지용
     results = []
 
     for excel_row in range(header_row + 1, ws.max_row + 1):
@@ -248,26 +247,6 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
         ad_name = str(cell_f.value).strip() if cell_f.value else ''
         if not ad_name or ''.join(ad_name.split()) in ('', '소재명'):
             continue
-
-        # ── 대구 패키지 특별 처리 ──────────────────────────────
-        if is_daegu_package(ws, excel_row):
-            if ad_name not in used_centers_per_ad:
-                used_centers_per_ad[ad_name] = set()
-            chosen, center = pick_daegu_pkg_apt(apt_map, used_centers_per_ad[ad_name])
-            if chosen:
-                used_centers_per_ad[ad_name].add(center)
-                ws.cell(row=excel_row, column=COL_CENTER).value = center
-                ws.cell(row=excel_row, column=COL_APT).value = chosen
-                results.append({'행': excel_row, '광고명': ad_name,
-                                '매칭 파일': '(대구 패키지 규칙)',
-                                '센터명': center, '아파트명': chosen,
-                                '유사도': '—', '비고': f'대구패키지 우선배정 ({center})'})
-            else:
-                results.append({'행': excel_row, '광고명': ad_name,
-                                '매칭 파일': '—', '센터명': '—', '아파트명': '—',
-                                '유사도': '—', '비고': '대구패키지 배정 실패'})
-            continue
-        # ──────────────────────────────────────────────────────
 
         # M열 지역 읽기 (지역 필터링용)
         b_region = str(ws.cell(row=excel_row, column=13).value or '').strip()
