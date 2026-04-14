@@ -49,7 +49,10 @@ def load_apt_map():
             center = str(row[col_center]).strip() if row[col_center] is not None else ''
             r1     = str(row[col_r1]).strip()     if row[col_r1]     is not None else ''
 
+            gubun = str(row[1]).strip() if row[1] is not None else ''  # B열(구분)
             if not aname or aname in ('None', '아파트명') or aname.startswith('합'):
+                continue
+            if gubun == '기타':   # 지하철·비아파트 항목 제외
                 continue
             if center in ('Y', 'None'):
                 center = ''
