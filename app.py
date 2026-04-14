@@ -8,7 +8,7 @@ import re
 import difflib
 from collections import Counter
 
-st.set_page_config(page_title="타운보드 센터 배정용", layout="wide")
+st.set_page_config(page_title="타운보드 센터 배정용(대구경북 Test)", layout="wide")
 st.title("📍 타운보드 센터 배정용")
 st.info("""
 **작동 방식**
