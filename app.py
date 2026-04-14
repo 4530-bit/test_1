@@ -9,7 +9,7 @@ import difflib
 from collections import Counter
 
 st.set_page_config(page_title="타운보드 센터 배정용", layout="wide")
-st.title("📍 타운보드 센터 배정용(대구경북 Test)")
+st.title("📍 타운보드 센터 배정용")
 st.info("""
 **작동 방식**
 - 가동리스트는 자동으로 불러옵니다.
