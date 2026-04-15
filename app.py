@@ -31,7 +31,7 @@ def load_apt_map():
         ws = wb.worksheets[0]
         result = {}
         header_found = False
-        col_apt, col_g, col_center, col_r1 = 3, 7, 13, 5  # col_r1: 지역1
+        col_apt, col_g, col_center, col_r1, col_hh = 3, 7, 13, 5, 11  # col_hh: 세대수
 
         for row in ws.iter_rows(values_only=True):
             if not header_found:
@@ -41,6 +41,7 @@ def load_apt_map():
                     col_g      = row_vals.index('지역3(법정)') if '지역3(법정)' in row_vals else 7
                     col_center = row_vals.index('센터명') if '센터명' in row_vals else 13
                     col_r1     = row_vals.index('지역1') if '지역1' in row_vals else 5
+                    col_hh     = row_vals.index('세대수') if '세대수' in row_vals else 11
                     header_found = True
                 continue
 
@@ -48,6 +49,8 @@ def load_apt_map():
             g_val  = str(row[col_g]).strip()      if row[col_g]      is not None else ''
             center = str(row[col_center]).strip() if row[col_center] is not None else ''
             r1     = str(row[col_r1]).strip()     if row[col_r1]     is not None else ''
+            try:    hh = int(row[col_hh]) if row[col_hh] is not None else 0
+            except: hh = 0
 
             gubun = str(row[1]).strip() if row[1] is not None else ''  # B열(구분)
             if not aname or aname in ('None', '아파트명') or aname.startswith('합'):
@@ -60,9 +63,9 @@ def load_apt_map():
                 r1 = ''
 
             if aname not in result:
-                result[aname] = (g_val, center, r1)
+                result[aname] = (g_val, center, r1, hh)
             elif not result[aname][1] and center:
-                result[aname] = (g_val, center, r1)
+                result[aname] = (g_val, center, r1, hh)
 
         wb.close()
         return result, None
@@ -223,11 +226,11 @@ def pick_daegu_pkg_apt(apt_map, used_centers):
     """칠성→대남→월배 순으로 미사용 센터에서 아파트 반환"""
     for center in DAEGU_PKG_CENTER_PRIORITY:
         if center not in used_centers:
-            center_apts = [a for a, (g, c, r) in apt_map.items() if c == center]
+            center_apts = [a for a, (g, c, r, h) in apt_map.items() if c == center]
             if center_apts:
                 return center_apts[0], center
     # 모두 소진 시 칠성 재사용
-    center_apts = [a for a, (g, c, r) in apt_map.items() if c == '칠성']
+    center_apts = [a for a, (g, c, r, h) in apt_map.items() if c == '칠성']
     return (center_apts[0], '칠성') if center_apts else (None, None)
 
 def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None):
@@ -285,7 +288,7 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
             used_g_per_ad[matched_key] = set()
 
         # B파일 M열 지역과 아파트 지역1이 일치하는 후보 우선 사용
-        sorted_cands = sorted(candidates, key=lambda a: apt_freq.get(a, 0), reverse=True)
+        sorted_cands = sorted(candidates, key=lambda a: (apt_freq.get(a, 0), apt_map[a][3]), reverse=True)
         region_matched = [a for a in sorted_cands
                           if not b_region or apt_map[a][2] == b_region]
         search_order = region_matched if region_matched else sorted_cands
@@ -301,7 +304,7 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
         chosen = None
         # 1순위: 공통 아파트(빈도≥2) 중 미사용 지역3
         for apt in high_freq:
-            g_val, _, _ = apt_map[apt]
+            g_val, _, _, _ = apt_map[apt]
             if g_val not in used_g_per_ad[matched_key]:
                 chosen = apt
                 used_g_per_ad[matched_key].add(g_val)
@@ -313,7 +316,7 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
                 for center_prio in DAEGU_PKG_CENTER_PRIORITY:
                     prio_cands = [a for a in low_freq if apt_map[a][1] == center_prio]
                     for apt in prio_cands:
-                        g_val, _, _ = apt_map[apt]
+                        g_val, _, _, _ = apt_map[apt]
                         if g_val not in used_g_per_ad[matched_key]:
                             chosen = apt
                             used_g_per_ad[matched_key].add(g_val)
@@ -322,7 +325,7 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
                         break
             else:
                 for apt in low_freq:
-                    g_val, _, _ = apt_map[apt]
+                    g_val, _, _, _ = apt_map[apt]
                     if g_val not in used_g_per_ad[matched_key]:
                         chosen = apt
                         used_g_per_ad[matched_key].add(g_val)
@@ -331,7 +334,7 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
         # 3순위: 최종 fallback (지역 불문 전체)
         if not chosen:
             for apt in sorted_cands:
-                g_val, _, _ = apt_map[apt]
+                g_val, _, _, _ = apt_map[apt]
                 if g_val not in used_g_per_ad[matched_key]:
                     chosen = apt
                     used_g_per_ad[matched_key].add(g_val)
@@ -339,7 +342,7 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
         if not chosen:
             chosen = sorted_cands[0]
 
-        g_val, center, _ = apt_map[chosen]
+        g_val, center, _, _ = apt_map[chosen]
         ws.cell(row=excel_row, column=COL_CENTER).value = center if center else ''
         ws.cell(row=excel_row, column=COL_APT).value = chosen
         results.append({'행': excel_row, '광고명': ad_name,
