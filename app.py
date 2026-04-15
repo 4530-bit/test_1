@@ -290,15 +290,46 @@ def process_b_file(b_file, ad_file_apts, apt_map, apt_freq, ad_file_regions=None
                           if not b_region or apt_map[a][2] == b_region]
         search_order = region_matched if region_matched else sorted_cands
 
+        # 대구 패키지 여부 확인
+        p_val = str(ws.cell(row=excel_row, column=16).value or '').strip()
+        is_daegu_pkg = (b_region == '대구') and ('패키지' in p_val or 'Half' in p_val)
+
+        # 빈도별 분리: 공통 아파트(빈도≥2) vs 단독 아파트(빈도=1)
+        high_freq = [a for a in search_order if apt_freq.get(a, 0) >= 2]
+        low_freq  = [a for a in search_order if apt_freq.get(a, 0) < 2]
+
         chosen = None
-        for apt in search_order:
+        # 1순위: 공통 아파트(빈도≥2) 중 미사용 지역3
+        for apt in high_freq:
             g_val, _, _ = apt_map[apt]
             if g_val not in used_g_per_ad[matched_key]:
                 chosen = apt
                 used_g_per_ad[matched_key].add(g_val)
                 break
+
+        # 2순위: 대구 패키지면 칠성→대남→월배 센터 순, 아니면 리스트 순
         if not chosen:
-            # 지역 일치 후보에서 못 찾으면 전체에서 재시도
+            if is_daegu_pkg:
+                for center_prio in DAEGU_PKG_CENTER_PRIORITY:
+                    prio_cands = [a for a in low_freq if apt_map[a][1] == center_prio]
+                    for apt in prio_cands:
+                        g_val, _, _ = apt_map[apt]
+                        if g_val not in used_g_per_ad[matched_key]:
+                            chosen = apt
+                            used_g_per_ad[matched_key].add(g_val)
+                            break
+                    if chosen:
+                        break
+            else:
+                for apt in low_freq:
+                    g_val, _, _ = apt_map[apt]
+                    if g_val not in used_g_per_ad[matched_key]:
+                        chosen = apt
+                        used_g_per_ad[matched_key].add(g_val)
+                        break
+
+        # 3순위: 최종 fallback (지역 불문 전체)
+        if not chosen:
             for apt in sorted_cands:
                 g_val, _, _ = apt_map[apt]
                 if g_val not in used_g_per_ad[matched_key]:
